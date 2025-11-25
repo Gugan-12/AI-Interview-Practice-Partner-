@@ -28,7 +28,7 @@ Works flawlessly end-to-end across Netlify + Render + Firebase.
 # 🧩 Features
 - 🎤 Real-time STT (Browser API)
 - 🔊 AI TTS (11Labs)
-- 🤖 AI responses (OpenRouter)
+- 🤖 AI responses (Claude API)
 - 🔐 Firebase Auth + Google OAuth
 - 🌐 Netlify Frontend
 - 🖥️ Render Flask Backend
@@ -96,7 +96,7 @@ Works flawlessly end-to-end across Netlify + Render + Firebase.
 [ Backend (Flask - Render) ]
     | Processes request
     v
-[ OpenRouter API ]
+[ Claude API ]
     | AI reply
     v
 [ Backend ]
@@ -130,4 +130,5 @@ Works flawlessly end-to-end across Netlify + Render + Firebase.
 
 
 # @ update
-- Claude API is updated for reliability 
+- Backend: Replaced API endpoints and logic handling to integrate Claude API.
+- Frontend: Updated app.html, chat.html, index.html, and results.html to support new Claude API response flow.
