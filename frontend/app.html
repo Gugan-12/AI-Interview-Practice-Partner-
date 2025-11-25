@@ -30,7 +30,7 @@
     <!-- Navigation -->
     <nav class="bg-white shadow-sm border-b border-gray-200">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between items-center h-16">
+            <div class="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center sm:h-16">
                 <div class="flex items-center gap-3">
                     <div class="bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full p-2">
                         <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -39,7 +39,7 @@
                     </div>
                     <span class="text-xl font-bold bg-gradient-to-r from-yellow-600 to-orange-600 bg-clip-text text-transparent">EightFold.ai</span>
                 </div>
-                <div class="flex items-center gap-4">
+                <div class="flex items-center gap-4 w-full justify-between sm:w-auto sm:justify-end">
                     <button onclick="showSettings()" class="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                         <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
@@ -56,7 +56,7 @@
     </nav>
 
     <!-- Main Content -->
-    <div class="max-w-4xl mx-auto px-4 py-8">
+        <div class="max-w-4xl mx-auto px-4 py-6 sm:py-8 w-full">
         <!-- Progress Steps -->
         <div class="mb-8">
             <div class="flex items-center justify-between mb-4">
@@ -64,23 +64,23 @@
                     <div id="progressBar" class="h-full bg-gradient-to-r from-yellow-400 to-orange-500 transition-all duration-500" style="width: 16.66%"></div>
                 </div>
             </div>
-            <div class="flex justify-between text-xs text-gray-500">
+            <div class="flex flex-col gap-1 sm:flex-row sm:justify-between text-xs text-gray-500">
                 <span id="stepLabel">Step 1 of 6</span>
                 <span id="stepName">Domain</span>
             </div>
         </div>
 
         <!-- Step Container -->
-        <div id="stepContainer" class="bg-white rounded-2xl shadow-xl p-8 animate-fadeIn">
+        <div id="stepContainer" class="bg-white rounded-2xl shadow-xl p-6 sm:p-8 animate-fadeIn">
             <!-- Steps will be dynamically inserted here -->
         </div>
 
         <!-- Navigation Buttons -->
-        <div class="flex gap-4 mt-6">
-            <button id="backBtn" onclick="prevStep()" class="hidden flex-1 px-6 py-3 bg-white border-2 border-gray-200 rounded-xl font-semibold text-gray-700 hover:bg-gray-50 transition-all">
+        <div class="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-6">
+            <button id="backBtn" onclick="prevStep()" class="hidden w-full sm:flex-1 px-6 py-3 bg-white border-2 border-gray-200 rounded-xl font-semibold text-gray-700 hover:bg-gray-50 transition-all">
                 ← Back
             </button>
-            <button id="nextBtn" onclick="nextStep()" class="flex-1 px-6 py-3 bg-gradient-to-r from-yellow-400 to-orange-500 text-white rounded-xl font-semibold hover:from-yellow-500 hover:to-orange-600 transition-all shadow-lg">
+            <button id="nextBtn" onclick="nextStep()" class="w-full sm:flex-1 px-6 py-3 bg-gradient-to-r from-yellow-400 to-orange-500 text-white rounded-xl font-semibold hover:from-yellow-500 hover:to-orange-600 transition-all shadow-lg">
                 Next Step →
             </button>
         </div>
@@ -202,9 +202,9 @@
                 subtitle: 'Choose the field you want to practice',
                 render: () => {
                     const html = `
-                        <h2 class="text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
+                        <h2 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
                         <p class="text-gray-600 mb-8">${steps[currentStep].subtitle}</p>
-                        <div class="grid grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             ${DOMAINS.map(d => `
                                 <div onclick="selectOption('domain', '${d.id}', this)" 
                                     class="option-card cursor-pointer p-6 border-2 border-gray-200 rounded-xl transition-all hover:border-yellow-400"
@@ -223,7 +223,7 @@
                 subtitle: 'What position are you interviewing for?',
                 render: () => {
                     return `
-                        <h2 class="text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
+                        <h2 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
                         <p class="text-gray-600 mb-8">${steps[currentStep].subtitle}</p>
                         <div class="max-w-md mx-auto">
                             <div class="relative">
@@ -252,9 +252,9 @@
                         { id: 'Mixed', icon: '🎯', desc: 'Combination of all' }
                     ];
                     return `
-                        <h2 class="text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
+                        <h2 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
                         <p class="text-gray-600 mb-8">${steps[currentStep].subtitle}</p>
-                        <div class="grid grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             ${types.map(t => `
                                 <div onclick="selectOption('type', '${t.id}', this)" 
                                     class="option-card cursor-pointer p-6 border-2 border-gray-200 rounded-xl transition-all"
@@ -274,10 +274,10 @@
                 render: () => {
                     const levels = ['Beginner', 'Intermediate', 'Advanced'];
                     return `
-                        <h2 class="text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
+                        <h2 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
                         <p class="text-gray-600 mb-8">${steps[currentStep].subtitle}</p>
                         <div class="max-w-md mx-auto">
-                            <div class="grid grid-cols-3 gap-3 mb-8">
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
                                 ${levels.map(level => `
                                     <div onclick="selectOption('difficulty', '${level}', this)" 
                                         class="option-card cursor-pointer p-4 border-2 border-gray-200 rounded-xl text-center font-semibold transition-all ${config.difficulty === level ? 'selected' : ''}"
@@ -299,10 +299,10 @@
                 subtitle: 'How long should the interview last?',
                 render: () => {
                     return `
-                        <h2 class="text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
+                        <h2 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
                         <p class="text-gray-600 mb-8">${steps[currentStep].subtitle}</p>
                         <div class="max-w-md mx-auto">
-                            <div class="grid grid-cols-3 gap-3 mb-8">
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
                                 ${[10, 15, 30].map(mins => `
                                     <div onclick="selectOption('duration', ${mins}, this)" 
                                         class="option-card cursor-pointer p-6 border-2 border-gray-200 rounded-xl text-center transition-all ${config.duration === mins ? 'selected' : ''}"
@@ -330,10 +330,10 @@
                 subtitle: 'Choose the interviewer voice',
                 render: () => {
                     return `
-                        <h2 class="text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
+                        <h2 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">${steps[currentStep].title}</h2>
                         <p class="text-gray-600 mb-8">${steps[currentStep].subtitle}</p>
                         <div class="max-w-md mx-auto">
-                            <div class="grid grid-cols-2 gap-4">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div onclick="selectOption('voice', 'male', this)" 
                                     class="option-card cursor-pointer p-8 border-2 border-gray-200 rounded-xl text-center transition-all ${config.voice === 'male' ? 'selected' : ''}"
                                     data-value="male">
@@ -341,11 +341,13 @@
                                     <h3 class="font-semibold text-gray-800 text-lg">Male Voice</h3>
                                 </div>
                                 <div onclick="selectOption('voice', 'female', this)" 
-                                    class="option-card cursor-pointer p-8 border-2 border-gray-200 rounded-xl text-center transition-all ${config.voice === 'female' ? 'selected' : ''}"
-                                    data-value="female">
+                                    class="option-card cursor-pointer p-8 border-2 border-gray-200 rounded-xl text-center transition-all ${config.voice === 'female' ? 'selected' : ''}" 
+                                    data-value="female" style="position: relative;">
+                                    <span style="position: absolute; top: 12px; right: 12px; font-size: 1.5rem; display: ${config.voice === 'female' ? 'block' : 'none'};">✔️</span>
                                     <div class="text-5xl mb-4">👩‍💼</div>
                                     <h3 class="font-semibold text-gray-800 text-lg">Female Voice</h3>
                                 </div>
+
                             </div>
                         </div>
                     `;
@@ -484,7 +486,11 @@
             if (confirm('Are you sure you want to sign out?')) {
                 try {
                     await auth.signOut();
-                    localStorage.clear();
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('interviewConfig');
+                    localStorage.removeItem('interviewSummary');
+                    localStorage.removeItem('userId');
+                    localStorage.removeItem('userEmail');
                     window.location.href = 'index.html';
                 } catch (error) {
                     alert('Error signing out: ' + error.message);
