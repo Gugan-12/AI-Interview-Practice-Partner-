@@ -7,7 +7,7 @@
 ## 👤 Author
 **Gugan J** — B.Tech Artificial Intelligence & Data Science  
 **Rathinam Technical Campus, Coimbatore**  
-**Expertise:** Machine Learning • IoT • Full-Stack Development • Cloud Deployment
+**Expertise:** Machine Learning • IoT • Full-Stack Development
 
 ---
 
@@ -59,7 +59,7 @@ Works flawlessly end-to-end across Netlify + Render + Firebase.
 +----------------------+
 |     AI SERVICES      |
 +----------------------+
-| OpenRouter API       |
+| Claude API       |
 | Rotational Keys      |
 | Domain/Role Logic    |
 +----------------------+
@@ -127,3 +127,7 @@ Works flawlessly end-to-end across Netlify + Render + Firebase.
 - Needs `.env` file with API keys  
 - Firebase config must be updated for production  
 - Works fully on free-tier hosting
+
+
+# @ update
+- Claude API is updated for reliability 
