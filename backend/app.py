@@ -1,483 +1,482 @@
-###################################################################################################
-# 🌟 EightFold.ai Interview Backend v2.0
-# - Flask backend API for text + voice interview chatbot
-# - Firebase Auth protected 
-# - OpenRouter LLM + ElevenLabs TTS
-# - Full session tracking with inappropriate content detection
-# - CORS for multiple frontend origins
-#
-# NOTE: Only structured + commented. ***No code changes were made.***
-###################################################################################################
-
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-import json, requests, os, uuid, time, re
+import json
+import requests
+import os
+import uuid
+import time
+import re
 from functools import wraps
 import firebase_admin
 from firebase_admin import credentials, auth
-from io import BytesIO
-
-###################################################################################################
-# 🔧 Flask App Initialization
-###################################################################################################
 
 app = Flask(__name__)
 
-# Allow multiple frontend origins (Netlify, localhost etc.)
-CORS(app,
-    resources={r"/*": {
+# -------------------------------------------------------
+# CORS
+# -------------------------------------------------------
+CORS(app, resources={
+    r"/api/*": {
         "origins": [
             "https://eightfoldai-chat.netlify.app",
             "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:5500",
-            "http://127.0.0.1:5500"
-        ]
-    }},
-    supports_credentials=True,
-    allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "OPTIONS"]
-)
+            "http://127.0.0.1:3000"
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True
+    }
+})
 
-###################################################################################################
-# 🔐 Firebase Admin Initialization
-###################################################################################################
-
+# -------------------------------------------------------
+# INIT FIREBASE
+# -------------------------------------------------------
 try:
-    cred_dict = json.loads(os.getenv('FIREBASE_CREDENTIALS', '{}'))
-    if cred_dict:
+    cred_json = os.getenv("FIREBASE_CREDENTIALS", "{}")
+    if cred_json != "{}":
+        cred_dict = json.loads(cred_json)
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
-        print("✅ Firebase Admin SDK initialized")
+        print("✅ Firebase Admin initialized")
     else:
         print("⚠️ Firebase not initialized — missing FIREBASE_CREDENTIALS")
 except Exception as e:
-    print(f"⚠️ Firebase initialization error: {str(e)}")
+    print("❌ Firebase init error:", str(e))
 
-###################################################################################################
-# 🔑 API Key Configuration + Rotation
-###################################################################################################
+# -------------------------------------------------------
+# Anthropic (Claude) CONFIG
+# -------------------------------------------------------
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+ANTHROPIC_VERSION = "2023-06-01"
 
-ELEVEN_KEYS = [k.strip() for k in os.getenv('ELEVEN_KEYS', '').split(',') if k.strip()]
-OPENROUTER_KEYS = [k.strip() for k in os.getenv('OPENROUTER_KEYS', '').split(',') if k.strip()]
-OPENAI_KEYS = [k.strip() for k in os.getenv('OPENAI_KEYS', '').split(',') if k.strip()]
+# -------------------------------------------------------
+# ElevenLabs CONFIG
+# -------------------------------------------------------
+ELEVEN_KEYS = [k.strip() for k in os.getenv("ELEVEN_KEYS", "").split(",") if k.strip()]
+VOICE_MAP = {
+    "male": os.getenv("ELEVEN_VOICE_MALE", "pNInz6obpgDQGcFmaJgB"),
+    "female": os.getenv("ELEVEN_VOICE_FEMALE", "21m00Tcm4TlvDq8ikWAM")
+}
 
-key_indices = {'eleven': 0, 'openrouter': 0, 'openai': 0}
+key_indices = {"eleven": 0}
 
-###################################################################################################
-# 💾 Session Storage
-###################################################################################################
+# Session store
+sessions = {}
 
-sessions = {}        # Stores active interview sessions
-user_sessions = {}   # Maps user → session IDs
 
-###################################################################################################
-# 🔐 Firebase Token Verification Decorator
-###################################################################################################
-
+# -------------------------------------------------------
+# AUTH MIDDLEWARE
+# -------------------------------------------------------
 def verify_firebase_token(f):
-    """Validates Firebase ID token for every protected route."""
     @wraps(f)
-    def decorated(*args, **kwargs):
-
-        # Allow OPTIONS preflight
+    def wrapper(*args, **kwargs):
         if request.method == "OPTIONS":
             return f(*args, **kwargs)
 
         auth_header = request.headers.get("Authorization")
-
         if not auth_header or not auth_header.startswith("Bearer "):
-            return jsonify({"error": "Unauthorized - No token"}), 401
+            return jsonify({"error": "Missing token"}), 401
 
         token = auth_header.split("Bearer ")[1]
 
         try:
             decoded = auth.verify_id_token(token)
             request.user_id = decoded["uid"]
-            request.user_email = decoded.get("email", "unknown")
+            request.user_email = decoded.get("email", "")
             return f(*args, **kwargs)
-        except Exception:
-            return jsonify({"error": "Unauthorized - Invalid token"}), 401
+        except Exception as e:
+            print("❌ Invalid Firebase token:", str(e))
+            return jsonify({"error": "Invalid token"}), 401
 
-    return decorated
+    return wrapper
 
-###################################################################################################
-# 🔄 API Key Rotator
-###################################################################################################
 
-def get_next_key(service):
-    """Rotate between multiple API keys to prevent usage limits."""
-    if service == 'eleven' and ELEVEN_KEYS:
-        idx = key_indices['eleven']
-        key_indices['eleven'] = (idx + 1) % len(ELEVEN_KEYS)
-        return ELEVEN_KEYS[idx]
+# -------------------------------------------------------
+# HELPER — ElevenLabs rotation
+# -------------------------------------------------------
+def get_next_eleven_key():
+    if not ELEVEN_KEYS:
+        return None
+    idx = key_indices["eleven"]
+    key = ELEVEN_KEYS[idx]
+    key_indices["eleven"] = (idx + 1) % len(ELEVEN_KEYS)
+    return key
 
-    if service == 'openrouter' and OPENROUTER_KEYS:
-        idx = key_indices['openrouter']
-        key_indices['openrouter'] = (idx + 1) % len(OPENROUTER_KEYS)
-        return OPENROUTER_KEYS[idx]
 
-    if service == 'openai' and OPENAI_KEYS:
-        idx = key_indices['openai']
-        key_indices['openai'] = (idx + 1) % len(OPENAI_KEYS)
-        return OPENAI_KEYS[idx]
+# -------------------------------------------------------
+# HELPER — Claude Messages API wrapper
+# -------------------------------------------------------
+def call_claude(system_prompt, conversation):
+    """
+    system_prompt: str
+    conversation: list of dict [{role:"user"/"assistant", content:""}]
+    Returns: dict with text_response, voice_response, end
+    """
 
-    return None
+    if not ANTHROPIC_API_KEY:
+        return {"error": "Claude API key missing"}
 
-###################################################################################################
-# 🚫 Inappropriate Content Detection
-###################################################################################################
+    url = "https://api.anthropic.com/v1/messages"
 
-def detect_inappropriate_content(text):
-    """Detects profanity, spam, harassment, gibberish etc."""
-    text_lower = text.lower()
-
-    profanity = ['fuck', 'shit', 'bitch', 'ass', 'damn', 'hell', 'stupid ai', 'dumb ai', 'idiot']
-    spam = ['spam', 'buy now', 'click here', 'win prize']
-    harassment = ['hate you', 'kill', 'threat', 'attack']
-
-    return {
-        'is_inappropriate': any(w in text_lower for w in profanity + harassment),
-        'is_spam': any(w in text_lower for w in spam),
-        'is_too_short': len(text.strip()) <= 2,
-        'needs_redirection': any(w in text_lower for w in profanity + harassment + spam)
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "Content-Type": "application/json"
     }
 
-###################################################################################################
-# 🤖 LLM Call Wrapper (OpenRouter)
-###################################################################################################
+    body = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 2000,
+        "system": system_prompt,
+        "messages": conversation
+    }
 
-def call_llm(messages, system_prompt, max_retries=3):
-    """Central LLM function with retries, key rotation & JSON extraction."""
-    for attempt in range(max_retries):
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=45)
 
-        api_key = get_next_key('openrouter')
-        if not api_key:
-            return {"error": "No LLM API key configured"}
+        if resp.status_code != 200:
+            print("❌ Claude Error:", resp.status_code, resp.text)
+            return {"error": f"Claude API error: {resp.status_code}"}
 
+        data = resp.json()
+
+        # Claude Messages API returns: data["content"][0]["text"]
+        text = data["content"][0]["text"]
+        
+        # Try to parse as JSON first
         try:
-            response = requests.post(
-                'https://openrouter.ai/api/v1/chat/completions',
-                headers={
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': 'https://ai-interview-practitioner.com',
-                    'X-Title': 'AI Interview Practitioner'
-                },
-                json={
-                    'model': 'google/gemma-2-9b-it',
-                    'messages': [{'role': 'system', 'content': system_prompt}] + messages,
-                    'temperature': 0.7,
-                    'max_tokens': 256
-                },
-                timeout=30
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                content = data['choices'][0]['message']['content']
-
-                # Extract JSON from markdown blocks if present
-                if '```json' in content:
-                    content = content.split('```json')[1].split('```')[0].strip()
-                elif '```' in content:
-                    content = content.split('```')[1].split('```')[0].strip()
-
+            # Remove markdown code blocks if present
+            if '```json' in text:
+                text = text.split('```json')[1].split('```')[0].strip()
+            elif '```' in text:
+                text = text.split('```')[1].split('```')[0].strip()
+            
+            parsed = json.loads(text)
+            
+            # Ensure required fields
+            if 'text_response' not in parsed:
+                parsed['text_response'] = text
+            if 'voice_response' not in parsed:
+                parsed['voice_response'] = parsed['text_response']
+            if 'end' not in parsed:
+                parsed['end'] = False
+            
+            # Clean voice_response (remove emojis, markdown)
+            if parsed.get('voice_response'):
+                voice = parsed['voice_response']
+                # Remove emojis and special characters
+                voice = re.sub(r'[^\x00-\x7F]+', '', voice)
+                voice = voice.replace('*', '').replace('#', '').replace('_', '').replace('`', '')
+                voice = ' '.join(voice.split())
+                parsed['voice_response'] = voice
+            
+            print(f"✅ Claude Success - Parsed JSON")
+            return parsed
+            
+        except json.JSONDecodeError:
+            # If not JSON, try to extract JSON with regex
+            json_match = re.search(r'\{.*\}', text, re.DOTALL)
+            if json_match:
                 try:
-                    parsed = json.loads(content)
+                    parsed = json.loads(json_match.group())
+                    if 'text_response' in parsed:
+                        print(f"✅ Claude Success - Extracted JSON")
+                        return parsed
                 except:
-                    # Fallback: extract JSON inside { ... }
-                    match = re.search(r'\{.*\}', content, re.DOTALL)
-                    if match:
-                        try:
-                            parsed = json.loads(match.group())
-                        except:
-                            pass
-                    else:
-                        parsed = {"text_response": content}
+                    pass
+            
+            # Fallback: return plain text as response
+            print(f"⚠️ Claude returned non-JSON, using plain text")
+            return {
+                "text_response": text,
+                "voice_response": re.sub(r'[^\x00-\x7F]+', '', text),
+                "end": False
+            }
 
-                # Ensure required fields exist
-                parsed.setdefault("voice_response", parsed.get("text_response"))
-                parsed.setdefault("end", False)
-                return parsed
+    except Exception as e:
+        print("❌ Claude Exception:", str(e))
+        return {"error": str(e)}
 
-            # Retryable errors
-            if response.status_code in [429, 500, 502, 503, 504]:
-                time.sleep(2)
-                continue
 
-            return {"error": f"LLM error {response.status_code}"}
-
-        except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return {"error": str(e)}
-
-    return {"error": "Max retries reached"}
-
-###################################################################################################
-# 🧠 System Prompt Generator
-###################################################################################################
-
+# -------------------------------------------------------
+# SYSTEM PROMPT BUILDER
+# -------------------------------------------------------
 def create_system_prompt(domain, role, interview_type, difficulty):
-    """Generates the long system prompt used for controlling LLM behavior."""
-    return f"""You are "AI Interview Practitioner," a professional mock interview coach... (FULL PROMPT SAME AS ORIGINAL)"""
+    return f"""You are "AI Interview Practitioner," a professional mock interview coach.
 
-###################################################################################################
-# 🌐 API ROUTES
-###################################################################################################
+The user has selected:
+- Domain: {domain}
+- Role: {role}
+- Interview Type: {interview_type}
+- Difficulty: {difficulty}
 
-# -----------------------------------------------------------------------------------------------
-# ROOT + HEALTH
-# -----------------------------------------------------------------------------------------------
+INTERVIEW FLOW:
+1. FIRST MESSAGE: Start with warm small talk (1-2 sentences). Ask how they're feeling about the interview.
+2. SECOND MESSAGE: Acknowledge warmly and ask one more casual question.
+3. THIRD MESSAGE: Transition: "Great! Let's dive into the interview. Here's my first question..." then ask first interview question.
+4. CONTINUE: Ask ONE question at a time, be encouraging.
+5. AFTER 5-7 QUESTIONS: Provide final summary.
 
-@app.route('/', methods=['GET'])
+EDGE CASES:
+- Irrelevant answers: Gently redirect to interview focus
+- Rude behavior: Maintain professionalism, may end early if severe
+- Short answers: Ask for elaboration
+- Gibberish: Ask to rephrase
+- "[END_INTERVIEW_TIME_UP]" or "[END_INTERVIEW_MANUAL]": Generate summary immediately
+
+CRITICAL: You MUST respond in valid JSON format ONLY. No extra text before or after.
+
+{{
+  "text_response": "Your message here (can include emojis)",
+  "voice_response": "Same message but plain text only, no emojis or symbols",
+  "end": false
+}}
+
+FINAL SUMMARY FORMAT (after 5-7 questions OR when ending):
+{{
+  "text_response": "Thank you for completing this interview! Here's your performance summary.",
+  "voice_response": "Thank you for completing this interview! Here's your performance summary.",
+  "strengths": "3-4 specific strengths with examples",
+  "weaknesses": "2-3 areas needing improvement",
+  "score": 85,
+  "communication_score": 80,
+  "technical_score": 85,
+  "confidence_score": 90,
+  "behavior_score": 85,
+  "overall_impression": "2-3 sentences about overall performance",
+  "recommendations": "3-4 actionable steps to improve",
+  "selected": true,
+  "end": true
+}}
+
+SELECTION CRITERIA:
+- Selected (true): Score >= 65, answered reasonably, showed effort
+- Not Selected (false): Score < 65, poor communication, inappropriate behavior
+
+Remember: Output ONLY valid JSON, nothing else!"""
+
+
+# -------------------------------------------------------
+# ROUTES
+# -------------------------------------------------------
+
+@app.route("/")
 def root():
-    return jsonify({
-        "status": "online",
-        "service": "EightFold.ai Interview Backend",
-        "version": "2.0",
-        "endpoints": {
-            "health": "/health",
-            "start_session": "/api/start-session",
-            "chat": "/api/chat",
-            "tts": "/api/tts",
-            "user_sessions": "/api/user-sessions"
-        }
-    }), 200
+    return {"status": "online", "model": ANTHROPIC_MODEL}, 200
 
 
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({
-        "status": "healthy",
-        "firebase_initialized": len(firebase_admin._apps) > 0,
-        "stt": "Browser-based",
-        "tts": f"ElevenLabs ({len(ELEVEN_KEYS)} keys)",
-        "llm": f"OpenRouter ({len(OPENROUTER_KEYS)} keys)",
-        "active_sessions": len(sessions),
-    }), 200
-
-###################################################################################################
-# 🟢 START INTERVIEW SESSION
-###################################################################################################
-
-@app.route('/api/start-session', methods=['POST', 'OPTIONS'])
+@app.route("/api/start-session", methods=["POST", "OPTIONS"])
 @verify_firebase_token
 def start_session():
-    """Creates a new interview session with system prompt + first small-talk message."""
-    if request.method == 'OPTIONS':
-        return '', 204
+    data = request.json or {}
 
-    data = request.json
-    domain = data.get('domain')
-    role = data.get('role')
-    interview_type = data.get('interview_type', 'Mixed')
-    difficulty = data.get('difficulty', 'Intermediate')
-    duration = data.get('duration', 15)
+    domain = data.get("domain")
+    role = data.get("role")
+    interview_type = data.get("interview_type", "Mixed")
+    difficulty = data.get("difficulty", "Intermediate")
+    duration = int(data.get("duration", 15))
 
-    # Validation
     if not domain or not role:
-        return jsonify({"error": "Domain and role required"}), 400
+        return {"error": "Missing domain/role"}, 400
 
-    # Generate session
     session_id = str(uuid.uuid4())
     system_prompt = create_system_prompt(domain, role, interview_type, difficulty)
 
-    messages = [{"role": "user", "content": "Start the interview with warm small talk as instructed."}]
-    ai_response = call_llm(messages, system_prompt)
+    # FIRST Claude message
+    conv = [
+        {"role": "user", "content": "Start the interview with warm small talk as instructed in your system prompt."}
+    ]
 
-    if "error" in ai_response:
-        return jsonify({"error": ai_response["error"]}), 500
+    result = call_claude(system_prompt, conv)
+
+    if "error" in result:
+        return {"error": result["error"]}, 500
+
+    # Save conversation
+    conv.append({"role": "assistant", "content": result.get("text_response", "")})
 
     # Save session
     sessions[session_id] = {
+        "system_prompt": system_prompt,
+        "messages": conv,
+        "created_at": time.time(),
         "user_id": request.user_id,
-        "user_email": request.user_email,
+        "exchange_count": 0,
+        "question_count": 0,
         "domain": domain,
         "role": role,
         "interview_type": interview_type,
         "difficulty": difficulty,
-        "duration_minutes": duration,
-        "system_prompt": system_prompt,
-        "messages": messages + [{"role": "assistant", "content": json.dumps(ai_response)}],
-        "created_at": time.time(),
-        "exchange_count": 0,
-        "question_count": 0,
-        "inappropriate_count": 0,
-        "redirect_count": 0
+        "duration_minutes": duration
     }
 
-    user_sessions.setdefault(request.user_id, []).append(session_id)
+    print(f"✅ Session started: {session_id}")
+    
+    return {
+        "session_id": session_id,
+        "first_question": {
+            "text_response": result.get("text_response", ""),
+            "voice_response": result.get("voice_response", result.get("text_response", "")),
+            "end": result.get("end", False)
+        }
+    }, 200
 
-    return jsonify({"session_id": session_id, "first_question": ai_response}), 200
 
-###################################################################################################
-# 💬 CHAT ENDPOINT
-###################################################################################################
-
-@app.route('/api/chat', methods=['POST', 'OPTIONS'])
+@app.route("/api/chat", methods=["POST", "OPTIONS"])
 @verify_firebase_token
 def chat():
-    """Main chatbot endpoint handling user messages and generating AI responses."""
-    if request.method == 'OPTIONS':
-        return '', 204
-
-    data = request.json
-    session_id = data.get('session_id')
-    user_message = data.get('user_message')
-
-    if not session_id or not user_message:
-        return jsonify({"error": "Missing session ID or message"}), 400
-
-    if session_id not in sessions:
-        return jsonify({"error": "Session not found"}), 404
-
-    session = sessions[session_id]
-
-    # Ensure correct user
-    if session['user_id'] != request.user_id:
-        return jsonify({"error": "Unauthorized session"}), 403
-
-    system_prompt = session['system_prompt']
-    messages = session['messages']
-
-    # Inappropriate detection
-    if not user_message.startswith('['):
-        flags = detect_inappropriate_content(user_message)
-        if flags['needs_redirection']:
-            session['inappropriate_count'] += 1
-            session['redirect_count'] += 1
-
-            if session['inappropriate_count'] >= 3:
-                user_message = "[END_INTERVIEW_INAPPROPRIATE_BEHAVIOR]"
-
-    # Append user message
-    messages.append({"role": "user", "content": user_message})
-    session['exchange_count'] += 1
-
-    if session['exchange_count'] > 3:
-        session['question_count'] += 1
-
-    # Add internal context for the LLM (not shown to user)
-    elapsed_minutes = (time.time() - session['created_at']) / 60
-    messages[-1] = {"role": "user", "content": f"""
-[CONTEXT - HIDDEN]
-Exchanges: {session['exchange_count']}
-Questions: {session['question_count']}
-Inappropriate: {session['inappropriate_count']}
-Redirects: {session['redirect_count']}
-Time left: {session['duration_minutes'] - elapsed_minutes:.1f} min
-[END]
-User message: {user_message}
-"""}
-
-    # Query the LLM
-    ai_response = call_llm(messages, system_prompt)
-
-    if "error" in ai_response:
-        return jsonify({"error": ai_response["error"]}), 500
-
-    # Restore original message + append AI reply
-    messages[-1] = {"role": "user", "content": user_message}
-    messages.append({"role": "assistant", "content": json.dumps(ai_response)})
-
-    # End cleanup
-    if ai_response.get("end"):
-        session["ended_at"] = time.time()
-
-    return jsonify(ai_response), 200
-
-###################################################################################################
-# 🔊 TTS (TEXT–TO–SPEECH)
-###################################################################################################
-
-@app.route('/api/tts', methods=['POST'])
-@verify_firebase_token
-def tts():
-    """Converts interview text into ElevenLabs TTS audio."""
-    data = request.json
-    text = data.get("text")
+    data = request.json or {}
+    session_id = data.get("session_id")
+    user_msg = data.get("user_message")
     voice_style = data.get("voice_style", "male")
 
-    api_key = ELEVEN_KEYS[0]
-    voice_id = "pNInz6obpgDQGcFmaJgB" if voice_style == "male" else "Xb0ZEqXn3XGQW2c3Kmbl"
+    if session_id not in sessions:
+        return {"error": "Invalid session"}, 404
 
-    response = requests.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-        json={"text": text, "model_id": "eleven_turbo_v2",
-              "voice_settings": {"stability": 0.35, "similarity_boost": 0.7}},
-        headers={"xi-api-key": api_key, "Content-Type": "application/json", "Accept": "audio/mpeg"}
-    )
+    session = sessions[session_id]
+    
+    # Verify ownership
+    if session.get("user_id") != request.user_id:
+        return {"error": "Unauthorized"}, 403
 
-    return Response(response.content, mimetype="audio/mpeg")
+    # Build conversation
+    conv = session["messages"]
+    
+    # Update counters
+    session["exchange_count"] += 1
+    if not user_msg.startswith("["):
+        session["question_count"] = session.get("question_count", 0) + 1
 
-###################################################################################################
-# 📚 FETCH USER SESSION HISTORY
-###################################################################################################
+    # Add context for AI
+    elapsed_min = (time.time() - session["created_at"]) / 60
+    context = f"""
+[INTERNAL CONTEXT - DO NOT MENTION]
+- Exchange: {session['exchange_count']}
+- Questions answered: {session.get('question_count', 0)}
+- Time elapsed: {elapsed_min:.1f} min
+[END CONTEXT]
 
-@app.route('/api/user-sessions', methods=['GET', 'OPTIONS'])
+User message: {user_msg}
+"""
+
+    conv.append({"role": "user", "content": context})
+
+    result = call_claude(session["system_prompt"], conv)
+
+    if "error" in result:
+        return {"error": result["error"]}, 500
+
+    # Update conversation with clean message
+    conv[-1] = {"role": "user", "content": user_msg}
+    conv.append({"role": "assistant", "content": result.get("text_response", "")})
+    
+    session["messages"] = conv
+
+    print(f"📊 Session {session_id}: Exchange {session['exchange_count']}")
+    
+    # Return full response (including summary fields if present)
+    response = {
+        "text_response": result.get("text_response", ""),
+        "voice_response": result.get("voice_response", result.get("text_response", "")),
+        "end": result.get("end", False)
+    }
+    
+    # Add summary fields if present
+    if result.get("strengths"):
+        response["strengths"] = result.get("strengths")
+    if result.get("weaknesses"):
+        response["weaknesses"] = result.get("weaknesses")
+    if result.get("score"):
+        response["score"] = result.get("score")
+    if result.get("communication_score"):
+        response["communication_score"] = result.get("communication_score")
+    if result.get("technical_score"):
+        response["technical_score"] = result.get("technical_score")
+    if result.get("confidence_score"):
+        response["confidence_score"] = result.get("confidence_score")
+    if result.get("behavior_score"):
+        response["behavior_score"] = result.get("behavior_score")
+    if result.get("overall_impression"):
+        response["overall_impression"] = result.get("overall_impression")
+    if result.get("recommendations"):
+        response["recommendations"] = result.get("recommendations")
+    if "selected" in result:
+        response["selected"] = result.get("selected")
+    
+    return response, 200
+
+
+@app.route("/api/tts", methods=["POST", "OPTIONS"])
 @verify_firebase_token
-def get_user_sessions():
-    """Returns all sessions that belong to the logged-in user."""
-    if request.method == 'OPTIONS':
-        return '', 204
+def tts():
+    data = request.json or {}
+    text = data.get("text", "")
+    voice_style = data.get("voice_style", "male")
 
-    result = []
-    for sid in user_sessions.get(request.user_id, []):
-        if sid in sessions:
-            s = sessions[sid]
-            result.append({
-                "session_id": sid,
-                "domain": s['domain'],
-                "role": s['role'],
-                "difficulty": s['difficulty'],
-                "created_at": s['created_at'],
-                "exchange_count": s['exchange_count'],
-                "ended": 'ended_at' in s
-            })
+    if not text:
+        return {"error": "No text"}, 400
+    
+    text = re.sub(r'[^\x00-\x7F]+', '', text)
+    text = ' '.join(text.split())
+    
+    api_key = get_next_eleven_key()
+    if not api_key:
+        return {"error": "Missing ElevenLabs key"}, 500
 
-    return jsonify({"user_id": request.user_id, "sessions": result}), 200
+    voice_id = VOICE_MAP.get(voice_style, VOICE_MAP["male"])
 
-###################################################################################################
-# 🧹 OLD SESSION CLEANUP (Auto)
-###################################################################################################
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json"
+    }
 
-def cleanup_old_sessions():
-    """Deletes sessions older than 24h or completed >1h ago."""
-    now = time.time()
-    to_delete = []
+    payload = {
+        "text": text,
+        "model_id": "eleven_flash_v2",
+        "voice_settings": {
+            "stability": 0.4,
+            "similarity_boost": 0.8
+        }
+    }
 
-    for sid, s in sessions.items():
-        if now - s['created_at'] > 86400:
-            to_delete.append(sid)
-        elif 'ended_at' in s and now - s['ended_at'] > 3600:
-            to_delete.append(sid)
+    try:
+        resp = requests.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream",
+            json=payload, 
+            headers=headers,
+            timeout=30
+        )
 
-    for sid in to_delete:
-        uid = sessions[sid]['user_id']
-        user_sessions[uid] = [x for x in user_sessions.get(uid, []) if x != sid]
-        del sessions[sid]
+        if resp.status_code != 200:
+            print("❌ TTS error:", resp.status_code, resp.text)
+            return {"error": "TTS failed"}, 500
 
-###################################################################################################
-# ⚠️ ERROR HANDLERS
-###################################################################################################
+        return Response(resp.content, mimetype="audio/mpeg")
+    
+    except Exception as e:
+        print("❌ TTS exception:", str(e))
+        return {"error": str(e)}, 500
 
-@app.errorhandler(404)
-def not_found(e):
-    return jsonify({"error": "Endpoint not found"}), 404
 
-@app.errorhandler(500)
-def internal(e):
-    return jsonify({"error": "Internal server error"}), 500
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = app.make_default_options_response()
+        headers = response.headers
+        headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+        headers['Access-Control-Allow-Headers'] = "Content-Type, Authorization"
+        headers['Access-Control-Allow-Methods'] = "GET, POST, OPTIONS"
+        return response
 
-###################################################################################################
-# 🚀 RUN SERVER
-###################################################################################################
 
-if __name__ == '__main__':
+# -------------------------------------------------------
+# START SERVER
+# -------------------------------------------------------
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    print("🚀 Starting EightFold.ai Interview Backend v2.0")
-    app.run(host='0.0.0.0', port=port, debug=False)
-
+    print("🚀 Claude Sonnet 4 backend")
+    print(f"✅ Model: {ANTHROPIC_MODEL}")
+    print(f"✅ ElevenLabs: {len(ELEVEN_KEYS)} keys")
+    print(f"🌐 Server: http://0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
